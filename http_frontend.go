@@ -1,11 +1,19 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -32,6 +40,58 @@ type BackendSelector interface {
 func ListenAndServeHTTP(address string, sel BackendSelector) error {
 	proxyHandler := http.HandlerFunc(makeProxyHandlerFunc(sel))
 	return http.ListenAndServe(address, proxyHandler)
+}
+
+func ListenAndServeHTTPS(address string, sel BackendSelector) error {
+	if _, err := os.Stat(os.Getenv("HOME") + "/.pow/.cert"); os.IsNotExist(err) {
+		priv, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			log.Fatalf("failed to generate private key: %s", err)
+		}
+		keyOut, err := os.OpenFile(os.Getenv("HOME") + "/.pow/.key", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+		if err != nil {
+			log.Fatalf("failed to open $HOME/.pow/.key for writing: %s", err)
+		}
+		pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
+		keyOut.Close()
+		var notBefore time.Time
+		notBefore = time.Now()
+		notAfter := notBefore.Add(365*24*time.Hour)
+		serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+		serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+		if err != nil {
+			log.Fatalf("failed to generate serial number: %s", err)
+		}
+		template := x509.Certificate{
+			SerialNumber: serialNumber,
+			Subject: pkix.Name{
+				Organization: []string{"Acme Co"},
+			},
+			NotBefore: notBefore,
+			NotAfter:  notAfter,
+			KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			BasicConstraintsValid: true,
+		}
+		template.DNSNames = append(template.DNSNames, "*.rf.dev")
+		template.DNSNames = append(template.DNSNames, "*.dev")
+		template.DNSNames = append(template.DNSNames, "*.*.dev")
+		template.DNSNames = append(template.DNSNames, "*.*.*.dev")
+		// template.IsCA = true
+		// template.KeyUsage |= x509.KeyUsageCertSign
+		derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+		if err != nil {
+			log.Fatalf("Failed to create certificate: %s", err)
+		}
+		certOut, err := os.OpenFile(os.Getenv("HOME") + "/.pow/.cert", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+		if err != nil {
+			log.Fatalf("failed to open $HOME/.pow/.cert for writing: %s", err)
+		}
+		pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+		certOut.Close()
+	}
+	proxyHandler := http.HandlerFunc(makeProxyHandlerFunc(sel))
+	return http.ListenAndServeTLS(address, os.Getenv("HOME") + "/.pow/.cert", os.Getenv("HOME") + "/.pow/.key", proxyHandler)
 }
 
 func makeProxyHandlerFunc(sel BackendSelector) func(http.ResponseWriter, *http.Request) {
