@@ -34,6 +34,9 @@ type Backend struct {
 }
 
 func (b *Backend) Close() {
+	if b == nil {
+		return
+	}
 	if b.proxy {
 		log.Println("Terminating", b.appPath, "proxy")
 
@@ -66,7 +69,13 @@ func (b *Backend) IsRestartRequested() bool {
 		if err != nil {
 			return false
 		}
-		return fi.ModTime().After(b.startedAt)
+		restartRequired := fi.ModTime().After(b.startedAt)
+		if restartRequired == true {
+			if b.spawned == false && b.exited == false {
+				return false
+			}
+		}
+		return restartRequired
 	}
 	fi, err := os.Stat(b.appPath + "/tmp/restart.txt")
 	if err != nil {

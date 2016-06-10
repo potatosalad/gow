@@ -108,6 +108,7 @@ func makeProxyHandlerFunc(sel BackendSelector) func(http.ResponseWriter, *http.R
 
 func proxyRequest(w http.ResponseWriter, r *http.Request, backendAddress string) {
 	r.RequestURI = ""
+	r.Close = true
 
 	if r.Header["Connection"] != nil && r.Header["Connection"][0] == "Upgrade" &&
 		r.Header["Upgrade"] != nil && r.Header["Upgrade"][0] == "websocket" {
